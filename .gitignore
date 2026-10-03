@@ -1,0 +1,24 @@
+# Intermediate build output.
+#
+# The compiled binaries under build/Release/ are committed on purpose so the
+# repo is usable without a toolchain. Only the intermediates are ignored.
+*.obj
+*.pdb
+*.ilk
+test/bin/
+res/*.res
+build/*/injector.res
+build/*/CMakeFiles/
+build/*/CMakeCache.txt
+build/*/cmake_install.cmake
+build/*/*.sln
+build/*/*.vcxproj
+build/*/*.vcxproj.*
+build/*/*.vcxproj.filters
+
+# Editor / OS noise
+.vs/
+.vscode/
+*.user
+.DS_Store
+Thumbs.db
