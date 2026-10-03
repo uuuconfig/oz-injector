@@ -1,118 +1,112 @@
 # oz injector
 
-A standalone x64 DLL injector, extracted from OpenZen's `native/loader` and
-generalised: any DLL, any process, two injection modes, dark UI.
+> [English](README.en.md) | 简体中文
 
-![oz injector UI](docs_ui_small.png)
+一个独立的 x64 DLL 注入器。从 OpenZen 的 `native/loader` 中剥离并泛化而来：任意 DLL、任意进程、两种注入模式、暗色界面。
 
-The OpenZen original carries one hardcoded payload (its own `OpenZen.dll`)
-inside an RCDATA blob and targets `javaw.exe`. This build takes the DLL path and
-the target from the UI, so it works as a general-purpose tool.
+![oz injector 界面](docs_ui_small.png)
 
-## What this is
+OpenZen 原版把一个硬编码的 payload（它自己的 `OpenZen.dll`）塞在 RCDATA 里，
+只针对 `javaw.exe`。这个版本把 DLL 路径和目标进程都交给用户指定，
+所以可以作为通用工具使用。
 
-A **developer / debugging tool**. It does the same thing as any process-injection
-utility you can find in the Windows toolchain: load a DLL into a running x64
-process of your choosing, either through the loader or by mapping the image
-yourself.
+## 这是什么
 
-Use it for what injection is normally used for — attaching a debugger, running
-instrumented or diagnostic code inside a live process, hooking to observe
-behaviour. You supply the DLL; this tool only performs the load.
+一个**开发 / 调试工具**。它做的事情和 Windows 工具链里任何进程注入工具一样：
+把一个 DLL 加载进你指定的、正在运行的 x64 进程里——要么走系统 loader，
+要么自己映射镜像。
 
-If you do not own the target process, do not have permission to modify it, or
-are not authorised to do so, this is not the tool for you. The target's owner can
-usually see the load in a module listing, a handle monitor, or EDR, and manual
-mapping only removes it from one of those views, not from all of them.
+用途就是注入通常的用途：附加调试器、在活进程里跑插桩或诊断代码、
+用 hook 观察行为。DLL 由你提供，这个工具只负责加载。
 
-## Build
+如果你不拥有目标进程、没有修改它的权限、或未获授权，那这个工具不适合你。
+目标进程的所有者通常能在模块列表、句柄监视器或 EDR 里看到这次加载；
+手动映射只是让它不出现在其中某一个视图里，**并不是从所有视图里消失**。
+
+## 编译
 
 ```
-build_msvc.bat            # Release, -> build\Release\oz_injector.exe
+build_msvc.bat            # Release，产物在 build\Release\oz_injector.exe
 build_msvc.bat Debug
 ```
 
-Or with CMake, where the generator can find the compiler:
+或者用 CMake（前提是生成器能找到编译器）：
 
 ```
 cmake -S . -B build -A x64
 cmake --build build --config Release
 ```
 
-`build_msvc.bat` calls the toolchain directly because this workspace's sandbox
-blocks `reg.exe`, which `vcvars64.bat` needs — CMake's compiler detection fails
-there. The batch script sets `INCLUDE`/`LIB`/`PATH` itself. It also builds and
-runs a UI self test, and fails the build if it does not pass.
+之所以额外提供 `build_msvc.bat`：本工作区的沙箱拦截了 `reg.exe`，而
+`vcvars64.bat` 依赖它——所以 CMake 的编译器探测在这里会失败。
+这个批处理脚本自己设置 `INCLUDE`/`LIB`/`PATH`。它还会编译并运行一个 UI
+自检，自检不过就让构建失败。
 
-Requirements: MSVC (VS 2022, 14.44 tested) and the Windows SDK. **No Qt, no
-vcpkg, no third-party libraries** — the UI is plain Win32 + GDI, so this builds
-in seconds rather than the ~2h a static Qt build needs.
+依赖：MSVC（VS 2022，实测 14.44）和 Windows SDK。**不需要 Qt、不需要
+vcpkg、不需要任何第三方库**——界面是纯 Win32 + GDI，所以构建只要几秒，
+而不是静态编译 Qt 需要的约 2 小时。
 
-Output: `build\Release\oz_injector.exe`, ~240 KB, single file, no runtime deps.
+产物：`build\Release\oz_injector.exe`，约 250 KB，单文件，无运行时依赖。
 
-## Use
+## 使用
 
-**GUI** — run it:
+**图形界面**——直接运行：
 
-1. Pick a process from the list (auto-refreshes every second; shows the window
-   title so you can tell instances apart).
-2. Pick a mode: `Manual map` or `LoadLibrary`.
-3. **Browse** to a DLL.
-4. Press **Inject**. The log pane shows each step and the final result.
+1. 从列表里选一个进程（每秒自动刷新；显示窗口标题，便于区分同名的多个实例）
+2. 选择模式：`Manual map` 或 `LoadLibrary`
+3. 点 **Browse** 选一个 DLL
+4. 点 **Inject**。日志区会显示每一步和最终结果
 
-**One-shot** — for scripts:
+**一次性模式**——供脚本使用：
 
 ```
 oz_injector.exe --inject <pid> <dll.dll> [--manual|--loadlibrary]
 ```
 
-Prints the step trace to stderr; exit code 0 on success, 1 on failure.
-`oz_injector.exe /?` prints usage.
+执行过程输出到 stderr；退出码 0 表示成功，1 表示失败。
+`oz_injector.exe /?` 打印用法。
 
-## The two modes
+## 两种模式
 
 | | Manual map | LoadLibrary |
 |---|---|---|
-| In the module list? | No | Yes |
-| Mechanism | relocates the PE in target memory, fixes imports, calls `DllMain` through a trampoline | remote `LoadLibraryW` |
-| DLL must be relocatable | Yes | No |
-| Harder to debug | Yes | No |
+| 出现在模块列表里？ | 否 | 是 |
+| 原理 | 在目标内存里重定位 PE、修复导入、通过蹦床调用 `DllMain` | 远程 `LoadLibraryW` |
+| DLL 必须可重定位 | 是 | 否 |
+| 调试难度 | 较高 | 较低 |
 
-Manual map keeps the DLL invisible to anything that inspects the target's module
-list. LoadLibrary is the classic approach — simpler, and it works with DLLs that
-were not built to be relocated.
+手动映射让 DLL 对所有检查目标模块列表的东西都不可见。LoadLibrary 是经典做法——
+更简单，而且对没有按可重定位要求构建的 DLL 也能用。
 
-Both need the target to run at or below the injector's integrity level. Run the
-injector elevated if the target is elevated.
+两种模式都要求目标进程的完整性级别不高于注入器。目标以管理员身份运行时，
+注入器也要以管理员身份运行。
 
-**A manually mapped image cannot be unloaded.** There is no `FreeLibrary` path
-for an image the loader never registered, so it stays resident for the life of
-the target process. The injector tracks one injected pid per session and refuses
-to inject twice into it.
+**手动映射的镜像无法卸载。** 对于一个 loader 从未注册的镜像，不存在
+`FreeLibrary` 路径，所以它会在目标进程的整个生命周期内驻留。注入器会记录
+本次会话中已注入的 pid，并拒绝对同一进程重复注入。
 
-## Layout
+## 目录结构
+
 ```
-src/oz_injector_core.h    the engine API (no UI, no Qt)
-src/oz_injector_core.cpp  engine: enumerate, validate, manual map, LoadLibrary
-src/oz_injector_ui.h/.cpp window: process list, path field, modes, log
-src/main.cpp              entry: GUI, and the --inject one-shot path
-src/selftest.cpp          in-process UI verification, run by the build
-src/render.cpp            dumps the UI to a PNG from inside the process
-res/                      icon, manifest (comctl32 v6, per-monitor DPI), rc
-test/                     end-to-end injection test
+src/oz_injector_core.h    引擎 API（不依赖 UI，不依赖 Qt）
+src/oz_injector_core.cpp  引擎：枚举、校验、手动映射、LoadLibrary
+src/oz_injector_ui.h/.cpp 窗口：进程列表、路径框、模式选择、日志
+src/main.cpp              入口：GUI，以及 --inject 一次性路径
+src/selftest.cpp          进程内 UI 自检，由构建脚本调用
+src/render.cpp            在进程内部把 UI 导出为 PNG
+res/                      图标、manifest（comctl32 v6、per-monitor DPI）、rc
+test/                     端到端注入测试
 ```
 
-The engine knows nothing about windows or messages, so it can be reused from a
-console tool or a different UI.
+引擎完全不知道窗口和消息的存在，所以可以被控制台工具或别的 UI 复用。
 
-## Tests
+## 测试
 
-**UI** — `build_msvc.bat` runs `selftest.exe` after linking. It creates the real
-window and asserts every child control came up, that the process list is
-populated, that the log has content, and that pressing Refresh appends a clean,
-readable line. Thirteen checks; all pass.
+**界面**——`build_msvc.bat` 在链接完成后会运行 `selftest.exe`。它创建真实的
+窗口，断言每个子控件都创建成功、进程列表有数据、日志区有内容，
+以及点 Refresh 后会追加一行干净可读的文本。共 13 项检查，全部通过。
 
-**Injection** —
+**注入**——
 
 ```
 cd test
@@ -120,61 +114,54 @@ build_test.bat
 python e2e_test.py
 ```
 
-It starts a probe host, injects a probe DLL with each mode, and asserts two
-things per mode: that `DllMain` actually ran (the DLL records its own image base
-to a marker file), and that the module appears in — or is absent from — the
-target's module list.
+它启动一个探针宿主进程，用两种模式分别注入一个探针 DLL，每种模式断言两件事：
+`DllMain` 确实执行了（DLL 会把自己的镜像基址写进标记文件），
+以及该模块出现在（或不出现在）目标进程的模块列表里。
 
-Last run: **2/2 passed.**
+最近一次运行：**2/2 通过。**
 
-| mode | DllMain base | in module list | expected |
+| 模式 | DllMain 基址 | 在模块列表里 | 预期 |
 |---|---|---|---|
-| `--manual` | `0x24921AA0000` | no | not listed |
-| `--loadlibrary` | `0x7FFBE93C0000` | yes | listed |
+| `--manual` | `0x24921AA0000` | 否 | 不应出现 |
+| `--loadlibrary` | `0x7FFBE93C0000` | 是 | 应出现 |
 
-The two recorded bases also demonstrate why the engine does not trust
-`GetExitCodeThread` for a 64-bit `HMODULE`: the injector observed `0xAC0B0000`
-while the DLL itself saw `0x7FFBAC0B0000`.
+这两个记录下来的基址也说明了为什么引擎不信任 `GetExitCodeThread` 返回的
+64 位 `HMODULE`：注入器观测到的是 `0xAC0B0000`，而 DLL 自己看到的是
+`0x7FFBAC0B0000`。
 
-## Notes and limits
+## 已知限制
 
-- x64 only. A 32-bit target or DLL is rejected with `WrongArchitecture`.
-- Manual mapping requires `IMAGE_DIRECTORY_ENTRY_BASERELOC`; a DLL built
-  `/DYNAMICBASE:NO` is rejected with `RelocationUnsupported`.
-- TLS callbacks and static initialisers that depend on the loader having
-  registered the module may behave differently under manual mapping.
-- Import resolution walks the target's module list, then falls back to a remote
-  `LoadLibraryW` for anything missing.
-- **The log pane is a plain `EDIT`, not a RichEdit or an owner-draw listbox.**
-  Both earlier attempts were wrong on this machine:
-  - RichEdit ignores `EM_SETBKGNDCOLOR` and `WM_CTLCOLOREDIT` for its background,
-    so the pane stayed white and could not be themed.
-  - An `LBS_OWNERDRAWFIXED` listbox does not support `LB_SETITEMDATA` (leaving
-    `DRAWITEMSTRUCT.itemData` undefined), and `LB_ADDSTRING` always takes an
-    **ANSI** string. On a CJK code page (this machine is ACP 936) that mangled
-    every non-ASCII character into mojibake — the `──` separators rendered as
-    garbage. `EM_REPLACESEL` takes a wide string, so an `EDIT` sidesteps all of
-    it.
-- `render_ui.bat` captures the UI from inside the owning process. An external
-  window enumerator cannot see this sandbox's GUI session, so the pixels have to
-  be read by the process that owns the window.
+- 仅支持 x64。32 位的目标或 DLL 会被拒绝，报 `WrongArchitecture`
+- 手动映射需要 `IMAGE_DIRECTORY_ENTRY_BASERELOC`；用 `/DYNAMICBASE:NO` 构建的
+  DLL 会被拒绝，报 `RelocationUnsupported`
+- 依赖 loader 已注册模块的 TLS 回调和静态初始化，在手动映射下行为可能不同
+- 导入解析会遍历目标进程的模块列表，缺失的项再回退到远程 `LoadLibraryW`
+- **日志区是普通 `EDIT` 控件，不是 RichEdit 也不是自绘列表框。** 前面两种方案
+  在这台机器上都是错的：
+  - RichEdit 会忽略 `EM_SETBKGNDCOLOR` 和 `WM_CTLCOLOREDIT` 对背景色的处理，
+    所以日志区一直是白的，无法做成暗色
+  - `LBS_OWNERDRAWFIXED` 列表框不支持 `LB_SETITEMDATA`（导致
+    `DRAWITEMSTRUCT.itemData` 未定义），而且 `LB_ADDSTRING` **永远只接受
+    ANSI 字符串**。在中日韩代码页下（本机 ACP = 936）所有非 ASCII 字符都会
+    变成乱码——`──` 分隔符渲染成了垃圾。`EM_REPLACESEL` 接受宽字符串，
+    所以换成 `EDIT` 就绕开了全部这些问题
+- `render_ui.bat` 是在拥有窗口的进程内部截图。外部的窗口枚举器看不到本沙箱的
+  GUI 会话，所以像素必须由持有窗口的那个进程自己去读
 
-## Publishing / pushing
+## 发布 / 推送
 
-`publish.bat` creates the GitHub repository if needed and pushes `main`:
+`publish.bat` 会在需要时创建 GitHub 仓库，然后推送 `main`：
 
 ```
-publish.bat            # prompts for the token
-publish.bat <token>   # non-interactive
+publish.bat            # 交互式，提示输入 token
+publish.bat <token>   # 非交互式
 ```
 
-It needs `git` on PATH plus a token with write access (a classic PAT with `repo`
-scope, or a fine-grained PAT with Contents: read+write). The token is passed in
-the remote URL rather than stored in `.git/config`, so it does not persist on
-disk.
+它需要 PATH 上有 `git`，以及一个具备写权限的 token（classic PAT 勾 `repo`
+scope，或 fine-grained PAT 勾 Contents: read+write）。token 通过 remote URL
+传递，不写进 `.git/config`，因此不会落盘。
 
-Note: the repository had to be created by a human. The GitHub connector
-available while this was written is a GitHub App without the Administration
-permission, so `POST /user/repos` returns
-`403 Resource not accessible by integration` — `publish.bat` handles both cases
-(creates the repo when the token can, then pushes either way).
+注意：仓库本身需要由人来创建。编写本文时所用的 GitHub connector 是一个
+缺少 Administration 权限的 GitHub App，`POST /user/repos` 会返回
+`403 Resource not accessible by integration`——`publish.bat` 两种情况都处理了
+（token 有权限时就建仓，然后无论如何都推送）。
