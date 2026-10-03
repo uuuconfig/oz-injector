@@ -1,0 +1,5 @@
+Standalone x64 DLL injector with manual-map and LoadLibrary modes.
+
+Win32 + GDI UI, no Qt, no vcpkg, no runtime dependencies. Ships as a single
+~250 KB executable that builds in seconds. The engine is UI-independent and
+reusable; a one-shot `--inject` mode is included for scripting.
