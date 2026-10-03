@@ -82,13 +82,45 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     // Browse + two radios + Inject + Refresh = 5 buttons.
     check(L"buttons (expect 5)", buttons == 5);
 
+    // Reproduce the reported "Inject is a blue block with no caption" bug. The
+    // three owner-draw buttons (Manual map / LoadLibrary / Inject) draw their
+    // caption in WM_DRAWITEM, which used to read DRAWITEMSTRUCT.itemData — a
+    // field that is undefined for BS_OWNERDRAW buttons. Assert every button
+    // actually carries a caption, so a regression cannot come back silently.
+    {
+        int captioned = 0, ownerdraw = 0;
+        HWND c = GetWindow(main, GW_CHILD);
+        while (c) {
+            wchar_t cls[64] = {0};
+            GetClassNameW(c, cls, 64);
+            if (wcscmp(cls, L"Button") == 0) {
+                // BS_OWNERDRAW == 0xB, the low byte of the style.
+                const LONG_PTR style =
+                    GetWindowLongPtrW(c, GWL_STYLE) & 0xF;
+                if (style == 0xB) ++ownerdraw;
+                if (GetWindowTextLengthW(c) > 0) ++captioned;
+            }
+            c = GetWindow(c, GW_HWNDNEXT);
+        }
+        std::fwprintf(stderr,
+                      L"  buttons captioned: %d/%d (owner-draw: %d)\n",
+                      captioned, buttons, ownerdraw);
+        check(L"all buttons have captions", captioned == buttons);
+        // The Inject button specifically — the one that was blank.
+        HWND inject = GetDlgItem(main, oz::ui::IDC_INJECT);
+        wchar_t cap[64] = {0};
+        if (inject) GetWindowTextW(inject, cap, 64);
+        std::fwprintf(stderr, L"  inject caption: [%ls]\n", cap);
+        check(L"inject button captioned", wcscmp(cap, L"Inject") == 0);
+    }
+
     HWND logbox = nullptr;
     child = GetWindow(main, GW_CHILD);
     while (child) {
         wchar_t cls[64] = {0};
         GetClassNameW(child, cls, 64);
         // The process list is a SysListView32; the log is a plain Edit.
-        if (wcscmp(cls, L"Edit") == 0 && GetDlgCtrlID(child) == 3104) {
+        if (wcscmp(cls, L"Edit") == 0 && GetDlgCtrlID(child) == oz::ui::IDC_LOG) {
             logbox = child;
             break;
         }
@@ -101,10 +133,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         check(L"log has content", chars0 > 0);
 
         // Reproduce the reported bug: pressing Refresh appended a garbled row.
-        HWND refresh = GetDlgItem(main, 3103);
+        HWND refresh = GetDlgItem(main, oz::ui::IDC_REFRESH);
         check(L"refresh button", refresh != nullptr);
         if (refresh) {
-            SendMessageW(main, WM_COMMAND, MAKEWPARAM(3103, BN_CLICKED),
+            SendMessageW(main, WM_COMMAND, MAKEWPARAM(oz::ui::IDC_REFRESH, BN_CLICKED),
                          reinterpret_cast<LPARAM>(refresh));
         }
 
@@ -158,6 +190,46 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         const int count = ListView_GetItemCount(list);
         std::fwprintf(stderr, L"  process rows: %d\n", count);
         check(L"process list populated", count > 0);
+
+        // Reproduce the reported "scrolling down snaps back to the top" bug.
+        // The cause was the 1 s timer calling refresh_processes() every tick,
+        // which rebuilt the whole ListView and reset the top index. Scroll to
+        // the bottom, let the timer fire, and confirm the view held its place.
+        if (count > 20) {
+            SendMessageW(list, LVM_ENSUREVISIBLE,
+                         static_cast<WPARAM>(count - 1), 0);
+            const int top_before =
+                static_cast<int>(SendMessageW(list, LVM_GETTOPINDEX, 0, 0));
+            std::fwprintf(stderr, L"  top index after scroll: %d of %d\n",
+                          top_before, count);
+            check(L"list scrolled away from top", top_before > 0);
+
+            // Fire the timer a few times, the way the clock would.
+            const UINT_PTR tid = 1;  // matches timer_id_ in the UI
+            for (int i = 0; i < 3; ++i) {
+                SendMessageW(main, WM_TIMER, static_cast<WPARAM>(tid), 0);
+            }
+            const int top_after =
+                static_cast<int>(SendMessageW(list, LVM_GETTOPINDEX, 0, 0));
+            std::fwprintf(stderr, L"  top index after 3 timer ticks: %d\n",
+                          top_after);
+            check(L"scroll survives refresh", top_after == top_before);
+
+            // And a forced rebuild (Refresh button) must hold it too.
+            HWND rb = GetDlgItem(main, oz::ui::IDC_REFRESH);
+            if (rb) {
+                SendMessageW(main, WM_COMMAND, MAKEWPARAM(oz::ui::IDC_REFRESH, BN_CLICKED),
+                             reinterpret_cast<LPARAM>(rb));
+            }
+            const int top_refresh = static_cast<int>(
+                SendMessageW(list, LVM_GETTOPINDEX, 0, 0));
+            std::fwprintf(stderr, L"  top index after Refresh: %d\n",
+                          top_refresh);
+            check(L"scroll survives Refresh", top_refresh == top_before);
+        } else {
+            std::fwprintf(stderr,
+                          L"  (only %d rows, skipping scroll test)\n", count);
+        }
     }
 
     std::fwprintf(stderr, L"selftest: %hs (%d failure(s))\n",

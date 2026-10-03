@@ -163,9 +163,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     // Press Refresh so the screenshot shows the log with more than one line,
     // and so the line that used to render as mojibake is on display.
-    HWND refresh = GetDlgItem(hwnd, 3103);
+    HWND refresh = GetDlgItem(hwnd, oz::ui::IDC_REFRESH);
     if (refresh) {
-        SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(3103, BN_CLICKED),
+        SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(oz::ui::IDC_REFRESH, BN_CLICKED),
                      reinterpret_cast<LPARAM>(refresh));
     }
     // Give the owner-drawn rows a chance to paint with the selection.
@@ -242,6 +242,72 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         rgb[i * 3 + 0] = bgra[i * 4 + 2];
         rgb[i * 3 + 1] = bgra[i * 4 + 1];
         rgb[i * 3 + 2] = bgra[i * 4 + 0];
+    }
+
+    // Pixel check on the owner-drawn buttons.
+    //
+    // Asserting GetWindowText on a BS_OWNERDRAW button proves nothing: the
+    // caption was always set, the bug was that WM_DRAWITEM drew the wrong
+    // pointer. Only the rendered pixels distinguish the two. Each of these
+    // buttons is a solid fill, so a correct render has a scattering of pixels
+    // far from that fill — the glyphs. A blank block has none.
+    {
+        int blank = 0;
+        const int ids[] = {oz::ui::IDC_RADIO_MANUAL, oz::ui::IDC_RADIO_LOADLIB, oz::ui::IDC_INJECT};
+        for (const int id : ids) {
+            HWND btn = GetDlgItem(hwnd, id);
+            if (!btn) continue;
+            RECT br{};
+            GetWindowRect(btn, &br);
+            // The capture is the whole window, so offset by the window origin.
+            const int bx = br.left - r.left;
+            const int by = br.top - r.top;
+            const int bw = br.right - br.left;
+            const int bh = br.bottom - br.top;
+
+            // Most common colour in the button = its background fill.
+            std::vector<unsigned long> hist;
+            for (int y = 2; y < bh - 2; ++y) {
+                for (int x = 2; x < bw - 2; ++x) {
+                    const int ix = bx + x;
+                    const int iy = by + y;
+                    if (ix < 0 || iy < 0 || ix >= w || iy >= h) continue;
+                    const size_t o =
+                        (static_cast<size_t>(iy) * w + static_cast<size_t>(ix)) * 3;
+                    hist.push_back((static_cast<unsigned long>(rgb[o]) << 16) |
+                                   (static_cast<unsigned long>(rgb[o + 1]) << 8) |
+                                   rgb[o + 2]);
+                }
+            }
+            if (hist.empty()) continue;
+            std::sort(hist.begin(), hist.end());
+            const unsigned long bg_key = hist[hist.size() / 2];
+
+            // Count pixels far from the fill: that is the text.
+            int contrast = 0;
+            for (const unsigned long k : hist) {
+                const int dr = static_cast<int>((k >> 16) & 0xFF) -
+                               static_cast<int>((bg_key >> 16) & 0xFF);
+                const int dg = static_cast<int>((k >> 8) & 0xFF) -
+                               static_cast<int>((bg_key >> 8) & 0xFF);
+                const int db = static_cast<int>(k & 0xFF) -
+                               static_cast<int>(bg_key & 0xFF);
+                if (dr * dr + dg * dg + db * db > 60 * 60) ++contrast;
+            }
+            const int pct = contrast * 100 / static_cast<int>(hist.size());            std::fwprintf(stderr,
+                          L"render: button %d text pixels %d/%zu (%d%%)\n",
+                          id, contrast, hist.size(), pct);
+            // A real caption covers a few percent of the button. The broken
+            // version renders 0.
+            if (contrast * 100 < static_cast<int>(hist.size()) * 2) ++blank;
+        }
+        if (blank) {
+            std::fwprintf(stderr,
+                          L"render: FAILED - %d owner-draw button(s) have no text\n",
+                          blank);
+            return 1;
+        }
+        std::fwprintf(stderr, L"render: owner-draw button text ok\n");
     }
 
     wchar_t out[MAX_PATH];

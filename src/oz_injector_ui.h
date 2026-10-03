@@ -41,6 +41,17 @@ constexpr COLORREF warn = RGB(0xe0, 0xa8, 0x3e);
 constexpr COLORREF err = RGB(0xe2, 0x56, 0x56);
 }  // namespace theme
 
+// Child control ids. These live in the header rather than being private to the
+// .cpp because the self test and the renderer have to name the same controls;
+// they used to be bare numbers (3102, 3103) repeated across three files, which
+// is exactly the kind of duplication that silently stops matching.
+constexpr int IDC_RADIO_MANUAL  = 2001;
+constexpr int IDC_RADIO_LOADLIB = 2002;
+constexpr int IDC_BROWSE        = 3101;
+constexpr int IDC_INJECT        = 3102;
+constexpr int IDC_REFRESH       = 3103;
+constexpr int IDC_LOG           = 3104;
+
 class AppWindow {
 public:
     AppWindow();
@@ -96,6 +107,10 @@ private:
     HFONT font_mono_ = nullptr;
     HBRUSH background_ = nullptr;  // owned; freed in the dtor
     HBRUSH bg_brush_ = nullptr;    // window bg, reused for WM_CTLCOLOR*
+
+    // Returns true when `next` is row-for-row identical to the cached list, in
+    // which case the ListView does not need rebuilding at all.
+    bool same_as_list(const std::vector<oz::ProcessInfo>& next) const;
 
     std::vector<oz::ProcessInfo> processes_;
     DWORD injected_pid_ = 0;   // pid we already injected into (this session)

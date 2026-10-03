@@ -8,6 +8,7 @@
 test/bin/
 res/*.res
 build/*/injector.res
+build/*/render.exe
 build/*/CMakeFiles/
 build/*/CMakeCache.txt
 build/*/cmake_install.cmake

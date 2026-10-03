@@ -42,9 +42,8 @@ void make_font(HFONT* out, int px_height, int weight, bool mono) {
 }
 
 // Flat, borderless radio look: the radio dot is drawn by the paint handler, so
-// the control itself is a plain STATIC that we draw over.
-constexpr int IDC_MANUAL = 2001;
-constexpr int IDC_LOADLIB = 2002;
+// the control itself is a plain STATIC that we draw over. The ids themselves
+// live in the header so the self test and renderer name the same controls.
 
 }  // namespace
 
@@ -210,29 +209,29 @@ LRESULT AppWindow::handle(UINT msg, WPARAM w, LPARAM l) {
             browse_ = CreateWindowExW(
                 0, L"BUTTON", L"Browse…",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(3101)), instance_, nullptr);
+                0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_BROWSE)), instance_, nullptr);
             SendMessageW(browse_, WM_SETFONT, reinterpret_cast<WPARAM>(font_ui_), TRUE);
 
             btn_manual_ = CreateWindowExW(
                 0, L"BUTTON", L"Manual map (stealth)",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-                0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_MANUAL)), instance_, nullptr);
+                0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_RADIO_MANUAL)), instance_, nullptr);
             btn_loadlib_ = CreateWindowExW(
                 0, L"BUTTON", L"LoadLibrary (classic)",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-                0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LOADLIB)), instance_, nullptr);
-            CheckRadioButton(hwnd_, IDC_MANUAL, IDC_LOADLIB, IDC_MANUAL);
+                0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_RADIO_LOADLIB)), instance_, nullptr);
+            CheckRadioButton(hwnd_, IDC_RADIO_MANUAL, IDC_RADIO_LOADLIB, IDC_RADIO_MANUAL);
 
             inject_ = CreateWindowExW(
                 0, L"BUTTON", L"Inject",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-                0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(3102)), instance_, nullptr);
+                0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_INJECT)), instance_, nullptr);
             SendMessageW(inject_, WM_SETFONT, reinterpret_cast<WPARAM>(font_bold_), TRUE);
 
             refresh_ = CreateWindowExW(
                 0, L"BUTTON", L"Refresh",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(3103)), instance_, nullptr);
+                0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_REFRESH)), instance_, nullptr);
             SendMessageW(refresh_, WM_SETFONT, reinterpret_cast<WPARAM>(font_ui_), TRUE);
 
             // Log pane: a read-only multiline EDIT.
@@ -252,7 +251,7 @@ LRESULT AppWindow::handle(UINT msg, WPARAM w, LPARAM l) {
                 WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_READONLY |
                     ES_AUTOVSCROLL | WS_VSCROLL | ES_NOHIDESEL,
                 0, 0, 0, 0, hwnd_,
-                reinterpret_cast<HMENU>(static_cast<INT_PTR>(3104)), instance_,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LOG)), instance_,
                 nullptr);
             SendMessageW(log_, WM_SETFONT, reinterpret_cast<WPARAM>(font_mono_), TRUE);
             // Keep the dark background: an EDIT honours WM_CTLCOLOREDIT only
@@ -304,7 +303,7 @@ LRESULT AppWindow::handle(UINT msg, WPARAM w, LPARAM l) {
         case WM_DRAWITEM: {
             auto* di = reinterpret_cast<DRAWITEMSTRUCT*>(l);
             if (di->CtlType != ODT_BUTTON) return 0;
-            const bool is_radio = (di->CtlID == IDC_MANUAL || di->CtlID == IDC_LOADLIB);
+            const bool is_radio = (di->CtlID == IDC_RADIO_MANUAL || di->CtlID == IDC_RADIO_LOADLIB);
             const bool checked =
                 is_radio && IsDlgButtonChecked(hwnd_, di->CtlID) == BST_CHECKED;
             const bool hot = (di->itemState & ODS_SELECTED) != 0;
@@ -312,7 +311,7 @@ LRESULT AppWindow::handle(UINT msg, WPARAM w, LPARAM l) {
 
             RECT rc = di->rcItem;
             COLORREF bg = theme::panel_hi, fg = theme::text, edge = theme::border;
-            if (di->CtlID == 3102) {  // Inject — accent when actionable.
+            if (di->CtlID == IDC_INJECT) {  // Inject — accent when actionable.
                 if (hot && on) { bg = RGB(0x2a, 0x53, 0x8f); fg = RGB(0xff, 0xff, 0xff); }
                 else if (!on) { bg = RGB(0x25, 0x28, 0x2f); fg = theme::text_dim; }
                 else { bg = theme::accent; fg = RGB(0x0b, 0x14, 0x22); }
@@ -330,7 +329,7 @@ LRESULT AppWindow::handle(UINT msg, WPARAM w, LPARAM l) {
             DeleteObject(b);
             FrameRect(di->hDC, &rc, static_cast<HBRUSH>(GetStockObject(GRAY_BRUSH)));
 
-            HFONT font = (di->CtlID == 3102) ? font_bold_ : font_ui_;
+            HFONT font = (di->CtlID == IDC_INJECT) ? font_bold_ : font_ui_;
             SelectObject(di->hDC, font);
             SetBkMode(di->hDC, TRANSPARENT);
             SetTextColor(di->hDC, fg);
@@ -356,9 +355,18 @@ LRESULT AppWindow::handle(UINT msg, WPARAM w, LPARAM l) {
                 rc.left += 10 + d + 8;
             }
 
-            DrawTextW(di->hDC,
-                      reinterpret_cast<LPCWSTR>(di->itemData),
-                      -1, &rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            // The caption must come from the control itself. DRAWITEMSTRUCT's
+            // itemData is the *ListBox / ComboBox / ListView item data* — for a
+            // BS_OWNERDRAW button it carries whatever was passed as lpParam to
+            // CreateWindowEx (nullptr here), so drawing it produced an empty
+            // coloured block with no text. GetWindowText is the documented way
+            // to reach a button's caption during WM_DRAWITEM.
+            wchar_t caption[128] = {0};
+            GetWindowTextW(di->hwndItem, caption,
+                           static_cast<int>(std::size(caption)));
+
+            DrawTextW(di->hDC, caption, -1, &rc,
+                      DT_LEFT | DT_VCENTER | DT_SINGLELINE);
             return TRUE;
         }
 
@@ -380,7 +388,7 @@ LRESULT AppWindow::handle(UINT msg, WPARAM w, LPARAM l) {
             const int code = HIWORD(w);
             if (code == BN_CLICKED) {
                 switch (id) {
-                    case 3101: {  // Browse
+                    case IDC_BROWSE: {  // Browse
                         OPENFILENAMEW ofn{};
                         wchar_t file[MAX_PATH] = {0};
                         ofn.lStructSize = sizeof ofn;
@@ -397,10 +405,10 @@ LRESULT AppWindow::handle(UINT msg, WPARAM w, LPARAM l) {
                         }
                         return 0;
                     }
-                    case 3102:  // Inject
+                    case IDC_INJECT:  // Inject
                         do_inject();
                         return 0;
-                    case 3103:  // Refresh
+                    case IDC_REFRESH:  // Refresh
                         refresh_processes();
                         append_log(L"Process list refreshed manually.", theme::text_dim);
                         return 0;
@@ -408,9 +416,9 @@ LRESULT AppWindow::handle(UINT msg, WPARAM w, LPARAM l) {
                         break;
                 }
             }
-            if (id == IDC_MANUAL || id == IDC_LOADLIB) {
+            if (id == IDC_RADIO_MANUAL || id == IDC_RADIO_LOADLIB) {
                 if (code == BN_CLICKED) {
-                    CheckRadioButton(hwnd_, IDC_MANUAL, IDC_LOADLIB, id);
+                    CheckRadioButton(hwnd_, IDC_RADIO_MANUAL, IDC_RADIO_LOADLIB, id);
                     enable_controls();
                     InvalidateRect(btn_manual_, nullptr, TRUE);
                     InvalidateRect(btn_loadlib_, nullptr, TRUE);
@@ -620,16 +628,51 @@ void AppWindow::refresh_processes() {
         (selected_index_ >= 0 && selected_index_ < static_cast<int>(processes_.size()))
             ? processes_[static_cast<size_t>(selected_index_)].pid
             : 0;
-    processes_ = oz::enumerate_processes(/*java_only=*/false);
+
+    std::vector<oz::ProcessInfo> next = oz::enumerate_processes(/*java_only=*/false);
     if (injected_pid_) {
-        for (auto& p : processes_) {
+        for (auto& p : next) {
             if (p.pid == injected_pid_) p.injected = true;
         }
     }
+
+    // A timer ticks once a second, and rebuilding the list means DeleteAllItems
+    // plus a re-insert of every row. That resets the scroll position to the top
+    // and makes the list jump under the cursor, so only touch the control when
+    // something actually changed. The set of PIDs is what the user sees move;
+    // a changed window title is worth a refresh too, but nothing else is.
+    if (same_as_list(next)) return;
+
+    processes_ = std::move(next);
     populate_list(prev_pid != 0);
 }
 
+bool AppWindow::same_as_list(const std::vector<oz::ProcessInfo>& next) const {
+    if (next.size() != processes_.size()) return false;
+    for (size_t i = 0; i < next.size(); ++i) {
+        const auto& a = next[i];
+        const auto& b = processes_[i];
+        if (a.pid != b.pid || a.window_title != b.window_title ||
+            a.injected != b.injected || a.elevated != b.elevated) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void AppWindow::populate_list(bool keep_selection) {
+    // Remember where the user is scrolled to. DeleteAllItems resets the list's
+    // top index to 0, so without this any rebuild yanks the view back to the
+    // first row even when the rebuild was triggered by an unrelated process
+    // starting up. The anchor is the process at the top, not the row index:
+    // rows shift when processes come and go, so an index would drift.
+    DWORD anchor_pid = 0;
+    if (const int top =
+            static_cast<int>(SendMessageW(list_, LVM_GETTOPINDEX, 0, 0));
+        top >= 0 && top < static_cast<int>(processes_.size())) {
+        anchor_pid = processes_[static_cast<size_t>(top)].pid;
+    }
+
     SendMessageW(list_, WM_SETREDRAW, FALSE, 0);
     ListView_DeleteAllItems(list_);
 
@@ -661,6 +704,21 @@ void AppWindow::populate_list(bool keep_selection) {
     SendMessageW(list_, WM_SETREDRAW, TRUE, 0);
     InvalidateRect(list_, nullptr, TRUE);
 
+    // Re-establish the scroll anchor before the selection, so the view lands
+    // where the user left it. LVM_ENSUREVISIBLE scrolls the minimum amount to
+    // make the row visible, which is what we want — if the row is already on
+    // screen it does not move at all.
+    for (size_t i = 0; i < processes_.size(); ++i) {
+        if (processes_[i].pid != anchor_pid) continue;
+        LVITEMW vis{};
+        vis.iItem = static_cast<int>(i);
+        vis.stateMask = 0;
+        vis.state = 0;
+        SendMessageW(list_, LVM_ENSUREVISIBLE, 0,
+                     reinterpret_cast<LPARAM>(&vis));
+        break;
+    }
+
     if (restore >= 0) {
         ListView_SetItemState(list_, restore, LVIS_SELECTED | LVIS_FOCUSED,
                               LVIS_SELECTED | LVIS_FOCUSED);
@@ -689,7 +747,7 @@ std::wstring AppWindow::selected_dll() const {
 }
 
 oz::InjectMode AppWindow::current_mode() const {
-    return IsDlgButtonChecked(hwnd_, IDC_LOADLIB) == BST_CHECKED
+    return IsDlgButtonChecked(hwnd_, IDC_RADIO_LOADLIB) == BST_CHECKED
                ? oz::InjectMode::LoadLibrary
                : oz::InjectMode::ManualMap;
 }
