@@ -91,7 +91,6 @@ the target process. The injector tracks one injected pid per session and refuses
 to inject twice into it.
 
 ## Layout
-
 ```
 src/oz_injector_core.h    the engine API (no UI, no Qt)
 src/oz_injector_core.cpp  engine: enumerate, validate, manual map, LoadLibrary
@@ -159,3 +158,23 @@ while the DLL itself saw `0x7FFBAC0B0000`.
 - `render_ui.bat` captures the UI from inside the owning process. An external
   window enumerator cannot see this sandbox's GUI session, so the pixels have to
   be read by the process that owns the window.
+
+## Publishing / pushing
+
+`publish.bat` creates the GitHub repository if needed and pushes `main`:
+
+```
+publish.bat            # prompts for the token
+publish.bat <token>   # non-interactive
+```
+
+It needs `git` on PATH plus a token with write access (a classic PAT with `repo`
+scope, or a fine-grained PAT with Contents: read+write). The token is passed in
+the remote URL rather than stored in `.git/config`, so it does not persist on
+disk.
+
+Note: the repository had to be created by a human. The GitHub connector
+available while this was written is a GitHub App without the Administration
+permission, so `POST /user/repos` returns
+`403 Resource not accessible by integration` — `publish.bat` handles both cases
+(creates the repo when the token can, then pushes either way).
