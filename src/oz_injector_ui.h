@@ -64,6 +64,68 @@ public:
     // CreateWindowExW, so the caller can explain what actually went wrong.
     DWORD last_error() const { return last_error_; }
 
+    // Which injection mode is selected. Public because the self test has to be
+    // able to assert that clicking an option actually changes it — the radio
+    // controls cannot report their own state, so this is the only place the
+    // answer comes from.
+    oz::InjectMode current_mode() const { return mode_; }
+
+    // Rebuild the process list from a fresh enumeration, as the 1 s timer does.
+    // Exposed so the self test can force the exact code path that used to reset
+    // the scroll position.
+    //
+    // `force` bypasses the change detection. Without it the call is a no-op on
+    // an idle machine — refresh_processes() early-outs when nothing changed —
+    // and a test asserting "the scroll survived" would be asserting against a
+    // function that never ran.
+    void refresh_for_test(bool force = true) { refresh_processes(force); }
+
+    // The PID of the row currently at the top of the list, or 0. This is the
+    // anchor the UI preserves across a rebuild, read through the same cache the
+    // restore path uses. A test that reads the PID out of the control's display
+    // text instead is reading a different thing and will disagree whenever the
+    // two lists are out of step.
+    // Raw LVM_GETTOPINDEX, exposed for diagnostics.
+    LRESULT top_index_raw() const {
+        // LVM_GETTOPINDEX == LVM_FIRST + 39 (CommCtrl.h). Spelled out because
+        // <commctrl.h> is not included here and the macro is gated on defines
+        // this header does not set — the same reason LVM_SETFONT is hardcoded
+        // in the .cpp. Do not "simplify" this to +27: that is a different,
+        // unassigned message and returns -1.
+        constexpr UINT kLvmGetTopIndex = 0x1000 + 39;
+        return SendMessageW(list_, kLvmGetTopIndex, 0, 0);
+    }
+
+    DWORD top_row_pid() const {
+        const int top = static_cast<int>(top_index_raw());
+        if (top < 0 || top >= static_cast<int>(processes_.size())) return 0;
+        return processes_[static_cast<size_t>(top)].pid;
+    }
+
+    // Does the list still contain a row for this PID? Lets a test tell "the
+    // scroll anchor was lost" apart from "the process the anchor named exited,
+    // so there was nothing to restore".
+    bool list_contains_pid(DWORD pid) const {
+        return row_of_pid(pid) >= 0;
+    }
+
+    // Row index of the given PID in the current list, or -1.
+    int row_of_pid(DWORD pid) const {
+        for (size_t i = 0; i < processes_.size(); ++i) {
+            if (processes_[i].pid == pid) return static_cast<int>(i);
+        }
+        return -1;
+    }
+
+    // How many rows fit on screen. Only an estimate from the client height and
+    // the row height, which is all a test needs to reason about visibility.
+    int visible_rows() const {
+        RECT rc{};
+        if (!GetClientRect(list_, &rc)) return 1;
+        const int h = rc.bottom - rc.top;
+        return h > 0 ? h / 20 : 1;  // ~20 px per row with the default font
+    }
+
     // The main window, so the caller can show it after create().
     HWND handle_hwnd() const { return hwnd_; }
 
@@ -73,8 +135,14 @@ private:
     LRESULT handle(UINT, WPARAM, LPARAM);
 
     void layout();
-    void refresh_processes();
-    void populate_list(bool keep_selection);
+    // `force` skips the change detection and rebuilds unconditionally. Only the
+    // self test needs it; the timer and button always pass the default.
+    void refresh_processes(bool force = false);
+    // `anchor_pid` is the PID of the row that must stay at the top after the
+    // rebuild, or 0 for no preference. The caller resolves it from the list
+    // that is still in the control — passing an index here would mean indexing
+    // one array with another one's coordinates.
+    void populate_list(bool keep_selection, DWORD anchor_pid);
     void append_log(const std::wstring& line, COLORREF colour);
     void clear_log();
     void do_inject();
@@ -87,7 +155,6 @@ private:
     DWORD selected_pid() const;
     void enable_controls();
     std::wstring selected_dll() const;
-    oz::InjectMode current_mode() const;
     static std::wstring basename(const std::wstring& path);
 
     HINSTANCE instance_ = nullptr;
@@ -119,6 +186,17 @@ private:
     HANDLE worker_ = nullptr;
     bool injecting_ = false;
     int log_lines_ = 0;
+
+    // Which injection mode the user picked.
+    //
+    // This cannot be read back from the radio buttons. They are created with
+    // BS_OWNERDRAW so the dark chrome can be drawn by hand, and that style
+    // occupies the button-type bits: the control is not a radio button at all.
+    // CheckRadioButton() on it silently does nothing, IsDlgButtonChecked()
+    // always answers 0, and BM_CLICK never flips the state. A selection made
+    // through the Win32 radio API is therefore not observable, so the answer
+    // lives here and the paint handler reads it from here.
+    oz::InjectMode mode_ = oz::InjectMode::LoadLibrary;
 
     // Log line colours, parallel to the log listbox contents.
     //

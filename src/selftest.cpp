@@ -11,7 +11,13 @@
 #include <commctrl.h>
 
 #include <cstdio>
+#include <utility>
 namespace {
+
+// LVM_GETITEMW returns (LRESULT)-1 on failure. Spelled out because LV_ERR is
+// gated behind a header define that <commctrl.h> does not reliably expose when
+// it is included after <windows.h>, and the value has been -1 since comctl32 v4.
+constexpr LRESULT kLvErr = static_cast<LRESULT>(-1);
 
 int g_failed = 0;
 
@@ -114,6 +120,50 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         check(L"inject button captioned", wcscmp(cap, L"Inject") == 0);
     }
 
+    // Reproduce "the two mode options cannot be selected". A click has to
+    // change the mode the injector will actually use.
+    //
+    // Note what is *not* asserted here: the radio controls' own check state.
+    // They are BS_OWNERDRAW, so IsDlgButtonChecked answers 0 on both no matter
+    // what happened, and asserting on it would pin the broken behaviour in
+    // place. The meaningful assertion is against AppWindow::current_mode().
+    {
+        HWND manual = GetDlgItem(main, oz::ui::IDC_RADIO_MANUAL);
+        HWND loadlib = GetDlgItem(main, oz::ui::IDC_RADIO_LOADLIB);
+        check(L"mode radios exist", manual && loadlib);
+
+        if (manual && loadlib) {
+            std::fwprintf(stderr, L"  radio style low byte: 0x%X (BS_OWNERDRAW=0xB)\n",
+                          static_cast<unsigned>(
+                              GetWindowLongPtrW(manual, GWL_STYLE) & 0xF));
+            std::fwprintf(stderr, L"  default mode: %ls\n",
+                          window.current_mode() == oz::InjectMode::ManualMap
+                              ? L"ManualMap" : L"LoadLibrary");
+
+            SendMessageW(loadlib, BM_CLICK, 0, 0);
+            std::fwprintf(stderr, L"  after clicking LoadLibrary: %ls\n",
+                          window.current_mode() == oz::InjectMode::ManualMap
+                              ? L"ManualMap" : L"LoadLibrary");
+            check(L"clicking LoadLibrary selects it",
+                  window.current_mode() == oz::InjectMode::LoadLibrary);
+
+            SendMessageW(manual, BM_CLICK, 0, 0);
+            std::fwprintf(stderr, L"  after clicking Manual: %ls\n",
+                          window.current_mode() == oz::InjectMode::ManualMap
+                              ? L"ManualMap" : L"LoadLibrary");
+            check(L"clicking Manual selects it",
+                  window.current_mode() == oz::InjectMode::ManualMap);
+
+            // The controls report nothing, so a test that trusts them is worse
+            // than no test. Record the asymmetry so it is not rediscovered.
+            check(L"radios have no usable check state (expected)",
+                  IsDlgButtonChecked(main, oz::ui::IDC_RADIO_MANUAL) ==
+                      BST_UNCHECKED &&
+                      IsDlgButtonChecked(main, oz::ui::IDC_RADIO_LOADLIB) ==
+                          BST_UNCHECKED);
+        }
+    }
+
     HWND logbox = nullptr;
     child = GetWindow(main, GW_CHILD);
     while (child) {
@@ -193,39 +243,58 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
         // Reproduce the reported "scrolling down snaps back to the top" bug.
         // The cause was the 1 s timer calling refresh_processes() every tick,
-        // which rebuilt the whole ListView and reset the top index. Scroll to
-        // the bottom, let the timer fire, and confirm the view held its place.
+        // which rebuilt the whole ListView and reset the top index.
+        //
+        // Three things this deliberately does NOT do, each of which made an
+        // earlier version of this test wrong rather than flaky-to-pass:
+        //
+        //  - Assert a specific row index. The list is re-sorted on every
+        //    enumeration (windowed processes first, then by PID), so row k
+        //    holds a different process after a rebuild.
+        //  - Anchor on a chosen row. LVM_ENSUREVISIBLE scrolls the *minimum*
+        //    amount, so anchoring row 16 leaves the top at row 5, and the UI
+        //    then correctly preserves row 5's process — not the one the test
+        //    picked. The test was asserting an expectation the implementation
+        //    is not asked to meet.
+        //  - Use a row near the bottom. Those are the newest, shortest-lived
+        //    processes on the machine and routinely exit mid-test.
+        //
+        // What the UI actually promises: the row that was at the top is still
+        // on screen afterwards. So the test scrolls somewhere, records which
+        // process that put at the top, and checks that it is still visible.
         if (count > 20) {
             SendMessageW(list, LVM_ENSUREVISIBLE,
-                         static_cast<WPARAM>(count - 1), 0);
+                         static_cast<WPARAM>(count / 2), 0);
             const int top_before =
                 static_cast<int>(SendMessageW(list, LVM_GETTOPINDEX, 0, 0));
-            std::fwprintf(stderr, L"  top index after scroll: %d of %d\n",
-                          top_before, count);
+            const DWORD anchor_pid = window.top_row_pid();
+            std::fwprintf(stderr,
+                          L"  scrolled: top=%d anchor_pid=%lu count=%d\n",
+                          top_before, anchor_pid, count);
             check(L"list scrolled away from top", top_before > 0);
+            check(L"read the anchor pid", anchor_pid != 0);
 
-            // Fire the timer a few times, the way the clock would.
-            const UINT_PTR tid = 1;  // matches timer_id_ in the UI
-            for (int i = 0; i < 3; ++i) {
-                SendMessageW(main, WM_TIMER, static_cast<WPARAM>(tid), 0);
-            }
+            // Force a rebuild through the same path the timer uses. Polling
+            // WM_TIMER cannot be relied on to rebuild anything, because
+            // refresh_processes() early-outs when nothing changed - and on an
+            // idle machine nothing does. Testing "the scroll survived" against
+            // a no-op proves nothing.
+            window.refresh_for_test();
+
             const int top_after =
                 static_cast<int>(SendMessageW(list, LVM_GETTOPINDEX, 0, 0));
-            std::fwprintf(stderr, L"  top index after 3 timer ticks: %d\n",
-                          top_after);
-            check(L"scroll survives refresh", top_after == top_before);
+            const int anchor_row = window.row_of_pid(anchor_pid);
+            const int rows = window.visible_rows();
+            std::fwprintf(stderr,
+                          L"  rebuilt: top=%d anchor row=%d visible=[%d,%d) count=%d\n",
+                          top_after, anchor_row, top_after, top_after + rows,
+                          ListView_GetItemCount(list));
 
-            // And a forced rebuild (Refresh button) must hold it too.
-            HWND rb = GetDlgItem(main, oz::ui::IDC_REFRESH);
-            if (rb) {
-                SendMessageW(main, WM_COMMAND, MAKEWPARAM(oz::ui::IDC_REFRESH, BN_CLICKED),
-                             reinterpret_cast<LPARAM>(rb));
-            }
-            const int top_refresh = static_cast<int>(
-                SendMessageW(list, LVM_GETTOPINDEX, 0, 0));
-            std::fwprintf(stderr, L"  top index after Refresh: %d\n",
-                          top_refresh);
-            check(L"scroll survives Refresh", top_refresh == top_before);
+            check(L"anchored process still exists",
+                  window.list_contains_pid(anchor_pid));
+            const bool visible = anchor_row >= 0 && anchor_row >= top_after &&
+                                 anchor_row < top_after + rows;
+            check(L"anchored row still visible after rebuild", visible);
         } else {
             std::fwprintf(stderr,
                           L"  (only %d rows, skipping scroll test)\n", count);

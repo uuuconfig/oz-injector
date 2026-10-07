@@ -58,7 +58,10 @@ Output: `build\Release\oz_injector.exe`, ~240 KB, single file, no runtime deps.
 
 1. Pick a process from the list (auto-refreshes every second; shows the window
    title so you can tell instances apart).
-2. Pick a mode: `Manual map` or `LoadLibrary`.
+2. Pick a mode: `Manual map` or `LoadLibrary`. **The default is `LoadLibrary`** —
+   it works with any DLL, needs no relocation table, and does not skip TLS
+   callbacks. Switch to `Manual map` only when the module list really has to come
+   up empty.
 3. **Browse** to a DLL.
 4. Press **Inject**. The log pane shows each step and the final result.
 
@@ -111,8 +114,25 @@ console tool or a different UI.
 
 **UI** — `build_msvc.bat` runs `selftest.exe` after linking. It creates the real
 window and asserts every child control came up, that the process list is
-populated, that the log has content, and that pressing Refresh appends a clean,
-readable line. Thirteen checks; all pass.
+populated, that the log has content, that pressing Refresh appends a clean,
+readable line, that every button has a caption, that **clicking a mode option
+actually changes the injection mode**, and that **the scrolled-to row is still
+visible after the list is rebuilt**. Twenty-three checks; all pass.
+
+Both of those have to assert on the real effect rather than the control's
+surface state:
+
+- **Mode options.** The two controls are `BS_OWNERDRAW`, and that style
+  consumes the button-type bits, so they are not radio buttons at all:
+  `CheckRadioButton` is a no-op, `IsDlgButtonChecked` always answers 0, and
+  `BM_CLICK` does not change anything. The assertion therefore reads
+  `AppWindow::current_mode()` — the value actually handed to the engine.
+- **Scroll.** The assertion is that the anchored row is still *visible*, not
+  that the row index is unchanged. Every enumeration re-sorts the list
+  (windowed processes first, then by PID), so indices legitimately move. The
+  test also forces the rebuild with `refresh_processes(force=true)`, because
+  otherwise the change detection returns early on an idle machine and the test
+  would be asserting against code that never ran.
 
 **Injection** —
 

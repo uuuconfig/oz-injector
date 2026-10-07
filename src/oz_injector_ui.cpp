@@ -220,7 +220,10 @@ LRESULT AppWindow::handle(UINT msg, WPARAM w, LPARAM l) {
                 0, L"BUTTON", L"LoadLibrary (classic)",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                 0, 0, 0, 0, hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_RADIO_LOADLIB)), instance_, nullptr);
-            CheckRadioButton(hwnd_, IDC_RADIO_MANUAL, IDC_RADIO_LOADLIB, IDC_RADIO_MANUAL);
+            // The default mode deliberately lives in AppWindow::mode_ rather
+            // than in a CheckRadioButton call: the controls are BS_OWNERDRAW,
+            // which consumes the button-type bits, so the radio API is a no-op
+            // on them and any state set there is unobservable.
 
             inject_ = CreateWindowExW(
                 0, L"BUTTON", L"Inject",
@@ -304,8 +307,13 @@ LRESULT AppWindow::handle(UINT msg, WPARAM w, LPARAM l) {
             auto* di = reinterpret_cast<DRAWITEMSTRUCT*>(l);
             if (di->CtlType != ODT_BUTTON) return 0;
             const bool is_radio = (di->CtlID == IDC_RADIO_MANUAL || di->CtlID == IDC_RADIO_LOADLIB);
+            // "Checked" is our own state, not the control's: these are
+            // BS_OWNERDRAW controls, so IsDlgButtonChecked would always say 0
+            // and the dot would never light up.
             const bool checked =
-                is_radio && IsDlgButtonChecked(hwnd_, di->CtlID) == BST_CHECKED;
+                is_radio && ((di->CtlID == IDC_RADIO_MANUAL)
+                                 ? mode_ == oz::InjectMode::ManualMap
+                                 : mode_ == oz::InjectMode::LoadLibrary);
             const bool hot = (di->itemState & ODS_SELECTED) != 0;
             const bool on = (di->itemState & ODS_DISABLED) == 0;
 
@@ -418,7 +426,12 @@ LRESULT AppWindow::handle(UINT msg, WPARAM w, LPARAM l) {
             }
             if (id == IDC_RADIO_MANUAL || id == IDC_RADIO_LOADLIB) {
                 if (code == BN_CLICKED) {
-                    CheckRadioButton(hwnd_, IDC_RADIO_MANUAL, IDC_RADIO_LOADLIB, id);
+                    // Record the choice ourselves. The controls are
+                    // BS_OWNERDRAW, not radio buttons (see the comment on
+                    // AppWindow::mode_), so BM_SETCHECK / IsDlgButtonChecked
+                    // cannot carry it.
+                    mode_ = (id == IDC_RADIO_MANUAL) ? oz::InjectMode::ManualMap
+                                                     : oz::InjectMode::LoadLibrary;
                     enable_controls();
                     InvalidateRect(btn_manual_, nullptr, TRUE);
                     InvalidateRect(btn_loadlib_, nullptr, TRUE);
@@ -623,7 +636,7 @@ void AppWindow::draw_list(NMHDR* header) {
 // process list
 // ---------------------------------------------------------------------------
 
-void AppWindow::refresh_processes() {
+void AppWindow::refresh_processes(bool force) {
     const DWORD prev_pid =
         (selected_index_ >= 0 && selected_index_ < static_cast<int>(processes_.size()))
             ? processes_[static_cast<size_t>(selected_index_)].pid
@@ -641,10 +654,17 @@ void AppWindow::refresh_processes() {
     // and makes the list jump under the cursor, so only touch the control when
     // something actually changed. The set of PIDs is what the user sees move;
     // a changed window title is worth a refresh too, but nothing else is.
-    if (same_as_list(next)) return;
+    if (!force && same_as_list(next)) return;
 
+    // Resolve the scroll anchor *before* overwriting processes_. The anchor is
+    // looked up by row index, and the row index refers to the list currently in
+    // the control — which is still the old one. Reading it after the assignment
+    // below would index the new array with the old array's index: both lists
+    // have different contents, so the resulting pid would be arbitrary and its
+    // restore loop would silently find nothing, leaving the view at the top.
+    DWORD anchor_pid = top_row_pid();
     processes_ = std::move(next);
-    populate_list(prev_pid != 0);
+    populate_list(prev_pid != 0, anchor_pid);
 }
 
 bool AppWindow::same_as_list(const std::vector<oz::ProcessInfo>& next) const {
@@ -660,19 +680,12 @@ bool AppWindow::same_as_list(const std::vector<oz::ProcessInfo>& next) const {
     return true;
 }
 
-void AppWindow::populate_list(bool keep_selection) {
-    // Remember where the user is scrolled to. DeleteAllItems resets the list's
-    // top index to 0, so without this any rebuild yanks the view back to the
-    // first row even when the rebuild was triggered by an unrelated process
-    // starting up. The anchor is the process at the top, not the row index:
-    // rows shift when processes come and go, so an index would drift.
-    DWORD anchor_pid = 0;
-    if (const int top =
-            static_cast<int>(SendMessageW(list_, LVM_GETTOPINDEX, 0, 0));
-        top >= 0 && top < static_cast<int>(processes_.size())) {
-        anchor_pid = processes_[static_cast<size_t>(top)].pid;
-    }
-
+void AppWindow::populate_list(bool keep_selection, DWORD anchor_pid) {
+    // `anchor_pid` is the row that was at the top, resolved by the caller while
+    // the old list was still in place. DeleteAllItems resets the list's top
+    // index to 0, so without this any rebuild yanks the view back to the first
+    // row. The anchor is a PID rather than a row index because rows shift when
+    // processes come and go.
     SendMessageW(list_, WM_SETREDRAW, FALSE, 0);
     ListView_DeleteAllItems(list_);
 
@@ -705,17 +718,16 @@ void AppWindow::populate_list(bool keep_selection) {
     InvalidateRect(list_, nullptr, TRUE);
 
     // Re-establish the scroll anchor before the selection, so the view lands
-    // where the user left it. LVM_ENSUREVISIBLE scrolls the minimum amount to
-    // make the row visible, which is what we want — if the row is already on
-    // screen it does not move at all.
+    // where the user left it.
+    //
+    // LVM_ENSUREVISIBLE takes the item index in wParam and requires lParam to be
+    // zero - the ListView_EnsureVisible macro passes it that way. Passing an
+    // LVITEM in lParam (the LVM_SETITEMSTATE shape) is accepted silently and
+    // acts on item 0, which is why an earlier version of this restore appeared
+    // to work while actually pinning the view to the first row.
     for (size_t i = 0; i < processes_.size(); ++i) {
         if (processes_[i].pid != anchor_pid) continue;
-        LVITEMW vis{};
-        vis.iItem = static_cast<int>(i);
-        vis.stateMask = 0;
-        vis.state = 0;
-        SendMessageW(list_, LVM_ENSUREVISIBLE, 0,
-                     reinterpret_cast<LPARAM>(&vis));
+        SendMessageW(list_, LVM_ENSUREVISIBLE, static_cast<WPARAM>(i), 0);
         break;
     }
 
@@ -744,12 +756,6 @@ std::wstring AppWindow::selected_dll() const {
     wchar_t buf[MAX_PATH] = {0};
     GetWindowTextW(path_edit_, buf, MAX_PATH);
     return buf;
-}
-
-oz::InjectMode AppWindow::current_mode() const {
-    return IsDlgButtonChecked(hwnd_, IDC_RADIO_LOADLIB) == BST_CHECKED
-               ? oz::InjectMode::LoadLibrary
-               : oz::InjectMode::ManualMap;
 }
 
 // ---------------------------------------------------------------------------
